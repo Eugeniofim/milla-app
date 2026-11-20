@@ -26,12 +26,79 @@ async function cuCarregar(forcar) {
   CU.buscando = true;
   try {
     await authEnsure();
-    const r = await supaFetch('rpc/estudio_custos_ia', { method: 'POST', body: JSON.stringify({ meses: 6 }) });
+    /* 24 meses: o "gasto até hoje" soma tudo o que o cofre mediu (a medição começou em outubro de 2026) */
+    const r = await supaFetch('rpc/estudio_custos_ia', { method: 'POST', body: JSON.stringify({ meses: 24 }) });
     if (r.status === 404) { CU.semFuncao = true; CU.dados = null; }
     else if (r.ok) { CU.dados = await r.json(); CU.semFuncao = false; CU.erro = ''; }
     else CU.erro = 'Não consegui ler os custos agora.';
   } catch (e) { CU.erro = 'Sem conexão: não consegui ler os custos.'; }
   finally { CU.buscando = false; CU.carregou = true; }
+}
+
+/* ---------- 20/11: COMO ESTÁ SENDO GASTO (toda a conta) ----------
+   Pedido dele: "na minha parte de ADM, é bom estar lá tudo como está sendo gasto, o que gastou até hoje,
+   para eu ter uma noção de gasto". Só o ADM dele vê. Usa o que o cofre mede por cliente e por mês:
+   o atendimento (robô, 'uso-robo') e o assistente do app ('gasto-ia'), com o modelo de IA de cada pedido.
+   Não é a conta inteira da Anthropic: o que não é medido por cliente (o assistente "pro", o Timeline SFX,
+   chaves usadas fora do cofre) só aparece no Console. A tela diz isso. */
+const CU_CHAVE_PROPRIA = ['ingrid'];   /* usam a chave de IA delas (cofre_clientes.anthropic_key): não sai da conta do estúdio */
+const CU_NOMES = {
+  pontadaareia: "Ponta d'a Areia (Milla)", millademo: 'Milla · demonstração ao vivo', mari: 'Mari · Dinamarca', ingrid: 'Ingrid · Roma',
+  melissa: 'Melissa Hallais', yalla: 'Yalla · Dubai', revisor: 'Robô do @estudio_ti_artes', vitrine: 'Vitrine do estúdio',
+};
+const cuNome = slug => CU_NOMES[slug] || (/^ti-arts-/.test(slug) ? 'Robô por assinatura (' + slug + ')' : slug);
+const CU_MODELOS = { 'claude-opus-5-5': 'Opus 5.5', 'claude-sonnet-5-5': 'Sonnet 5.5', 'claude-haiku-5-5': 'Haiku 5.5', 'claude-fable-5-2': 'Fable 5.2' };
+const cuModelo = m => CU_MODELOS[m] || String(m || '?').replace(/^claude-/, '');
+function cuLinhasTodas() {
+  const L = [];
+  ((CU.dados && CU.dados.robo) || []).forEach(x => L.push({ tipo: 'robo', cliente: x.cliente, mes: x.mes, d: x.dados || {} }));
+  ((CU.dados && CU.dados.assistente) || []).forEach(x => L.push({ tipo: 'assistente', cliente: x.cliente, mes: x.mes, d: x.dados || {} }));
+  return L;
+}
+function vGastos(mes) {
+  const L = cuLinhasTodas(), propria = c => CU_CHAVE_PROPRIA.includes(c), usd = x => Number(x.d.usd) || 0;
+  const sua = L.filter(x => !propria(x.cliente));
+  const mesTot = sua.filter(x => x.mes === mes).reduce((t, x) => t + usd(x), 0), tudoTot = sua.reduce((t, x) => t + usd(x), 0);
+  const desde = L.map(x => x.mes).sort()[0];
+  const atual = mes === cuMesAtual(), fr = cuFracao(mes), dia = atual ? mesTot / Math.max(1, new Date().getDate()) : 0;
+  /* por cliente: o mês escolhido e tudo o que já gastou */
+  const porCli = {};
+  L.forEach(x => {
+    const c = porCli[x.cliente] = porCli[x.cliente] || { cliente: x.cliente, robo: 0, assist: 0, tudo: 0, resp: 0, pedidos: 0, modelos: {} };
+    c.tudo += usd(x);
+    if (x.mes !== mes) return;
+    if (x.tipo === 'robo') { c.robo += usd(x); c.resp += Number(x.d.respostas_ia) || 0; } else { c.assist += usd(x); c.pedidos += Number(x.d.pedidos) || 0; }
+    Object.entries(x.d.por_modelo || {}).forEach(([m, v]) => { c.modelos[m] = (c.modelos[m] || 0) + (Number(v && v.usd) || 0); });
+  });
+  const linhas = Object.values(porCli).sort((a, b) => (b.robo + b.assist) - (a.robo + a.assist) || b.tudo - a.tudo);
+  /* por modelo de IA, no mês (só o que sai da sua conta) */
+  const porModelo = {};
+  sua.filter(x => x.mes === mes).forEach(x => Object.entries(x.d.por_modelo || {}).forEach(([m, v]) => { porModelo[m] = (porModelo[m] || 0) + (Number(v && v.usd) || 0); }));
+  const totModelo = Object.values(porModelo).reduce((t, v) => t + v, 0) || 1;
+  const modelos = Object.entries(porModelo).sort((a, b) => b[1] - a[1]);
+  const cards = [
+    ['Gasto até hoje', cuR(tudoTot), cuUS(tudoTot) + (desde ? ' desde ' + cuNomeMes(desde) : '')],
+    ['Em ' + cuNomeMes(mes), cuR(mesTot), cuUS(mesTot) + (atual ? ' até hoje' : '')],
+    [atual ? 'Por dia neste mês' : 'Por dia no mês', cuR(atual ? dia : mesTot / new Date(+mes.slice(0, 4), +mes.slice(5), 0).getDate()), 'média'],
+    [atual ? 'Fim do mês, neste ritmo' : 'Clientes com gasto', atual ? cuR(mesTot / fr) : String(linhas.filter(c => c.robo + c.assist > 0).length), atual ? 'só o que é medido por cliente' : 'no mês'],
+  ];
+  const linha = c => {
+    const tot = c.robo + c.assist, mods = Object.entries(c.modelos).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
+    return `<tr${propria(c.cliente) ? ' class="cu-fora"' : ''}><th scope="row">${esc(cuNome(c.cliente))}${propria(c.cliente) ? ' <small>chave própria: não sai da sua conta</small>' : ''}</th>
+      <td class="num">${c.robo ? cuR(c.robo) : '—'}</td><td class="num">${c.assist ? cuR(c.assist) : '—'}</td><td class="num"><b>${tot ? cuR(tot) : '—'}</b></td>
+      <td class="num">${c.resp ? c.resp.toLocaleString('pt-BR') + ' resp.' : c.pedidos ? c.pedidos.toLocaleString('pt-BR') + ' pedidos' : '—'}</td>
+      <td>${mods.length ? mods.map(([m, v]) => esc(cuModelo(m)) + ' ' + Math.round(v / (tot || 1) * 100) + '%').join(' · ') : '—'}</td>
+      <td class="num">${c.tudo ? cuR(c.tudo) : '—'}</td></tr>`;
+  };
+  return `<section class="bloco" aria-labelledby="ga-t"><div class="bloco-cab"><h2 id="ga-t">Como está sendo gasto</h2><span class="sm">toda a conta, não só a Milla</span></div>
+    <div class="ga-cards">${cards.map(([t, v, s]) => `<div class="ga-card"><span class="kpi-rot">${esc(t)}</span><b class="num">${esc(v)}</b><span class="sm">${esc(s)}</span></div>`).join('')}</div>
+    ${modelos.length ? `<div class="ga-mod"><span class="kpi-rot">Por modelo de IA em ${esc(cuNomeMes(mes))}</span>
+      <div class="ga-mod-barra" role="img" aria-label="${esc(modelos.map(([m, v]) => cuModelo(m) + ' ' + Math.round(v / totModelo * 100) + '%').join(', '))}">${modelos.map(([m, v], i) => `<i class="ga-m${i % 4}" style="width:${(v / totModelo * 100).toFixed(1)}%"></i>`).join('')}</div>
+      <div class="ga-mod-leg">${modelos.map(([m, v], i) => `<span><i class="ga-m${i % 4}" aria-hidden="true"></i>${esc(cuModelo(m))} <b>${cuR(v)}</b> <small>${Math.round(v / totModelo * 100)}%</small></span>`).join('')}</div></div>` : ''}
+    <div class="cu-tab"><table class="ga-tab"><thead><tr><th scope="col">Cliente</th><th scope="col">Atendimento</th><th scope="col">Assistente do app</th><th scope="col">Total em ${esc(AS_MES[Number(mes.slice(5)) - 1] || '')}</th><th scope="col">Uso</th><th scope="col" style="text-align:left">Modelos</th><th scope="col">Até hoje</th></tr></thead>
+      <tbody>${linhas.length ? linhas.map(linha).join('') : '<tr><td colspan="7" class="sm">Nada medido ainda.</td></tr>'}</tbody></table></div>
+    <p class="sm ga-nota">Aqui está o que o atendimento (robô) e o assistente de cada app medem por cliente, desde ${esc(desde ? cuNomeMes(desde) : 'o começo da medição')}. A conta da Anthropic também tem gastos que não são medidos por cliente, como o assistente "pro" e o Timeline SFX. O total exato e o saldo ficam no Console da Anthropic.</p>
+  </section>`;
 }
 
 /* ---------- 20/11: CRÉDITOS E LUCRO por imobiliária ----------
@@ -151,7 +218,8 @@ function vCustos() {
   const quem = cuQuem().map(q => ({ ...q, m: cuDoMes(q.slug, mes) }));
   const imob = quem.filter(q => !q.demo);
   const tot = imob.reduce((t, q) => t + q.m.usd, 0), resp = imob.reduce((t, q) => t + q.m.resp, 0), usdResp = imob.reduce((t, q) => t + q.m.usdR, 0);
-  const tudo = [...((CU.dados && CU.dados.robo) || []), ...((CU.dados && CU.dados.assistente) || [])].filter(x => x.mes === mes).reduce((t, x) => t + (Number(x.dados && x.dados.usd) || 0), 0);
+  /* toda a conta do estúdio no mês: sem quem usa a própria chave de IA (não sai da conta dele) */
+  const tudo = [...((CU.dados && CU.dados.robo) || []), ...((CU.dados && CU.dados.assistente) || [])].filter(x => x.mes === mes && !CU_CHAVE_PROPRIA.includes(x.cliente)).reduce((t, x) => t + (Number(x.dados && x.dados.usd) || 0), 0);
   const filtro = `<div class="chips" role="group" aria-label="Mês">${meses.map(m => `<button type="button" class="chip ${m === mes ? 'on' : ''}" data-act="cu-mes" data-v="${m}" aria-pressed="${m === mes}">${esc(cuNomeMes(m))}${m === cuMesAtual() ? ' (até hoje)' : ''}</button>`).join('')}</div>`;
   const kpis = [
     ['IA das imobiliárias', cuR(tot), cuUS(tot) + (atual ? ' até hoje' : ' no mês')],
@@ -177,6 +245,7 @@ function vCustos() {
   const hist = quem.map(q => `<tr><th scope="row">${esc(q.nome)}</th>${meses.slice().reverse().map(m => { const u = cuDoMes(q.slug, m).usd; return `<td class="num ${m === mes ? 'cu-sel' : ''}">${u ? cuR(u) : '—'}</td>`; }).join('')}</tr>`).join('');
   return `${topo}${filtro}
     <section class="kpis adm-kpis" aria-label="Resumo">${kpis.map(([t, v, s]) => `<div class="kpi"><span class="kpi-rot">${esc(t)}</span><b class="num">${esc(v)}</b><span class="sm">${esc(s)}</span></div>`).join('')}</section>
+    ${vGastos(mes)}
     ${vLucro(mes)}
     <section class="bloco" aria-labelledby="cu-t1"><div class="bloco-cab"><h2 id="cu-t1">Quem gasta mais em ${esc(cuNomeMes(mes))}</h2><span class="sm">robô + assistente do app</span></div>
       <div class="cu-barras">${ord.length ? barras : '<div class="sm vazio">Nenhuma imobiliária com app ligado ainda. Ligue em Clientes › Ficha › App da imobiliária.</div>'}</div></section>
