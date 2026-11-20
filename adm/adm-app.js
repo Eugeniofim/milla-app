@@ -5,7 +5,7 @@
    Entra a conta do estúdio (o mesmo e-mail e a mesma senha do TI ARTES OS). Qualquer outra conta
    ouve "esta conta não é do studio Ti Artes" e não vê nada: a RLS do banco confere de novo.
      #/clientes  as imobiliárias e as mensalidades (adm.js)
-     #/custos    o gasto de IA de cada uma, mês a mês (custos.js)
+     #/custos    o gasto de IA de cada uma, mês a mês, e os créditos e o lucro de cada imobiliária (custos.js)
    ===================================================== */
 'use strict';
 
@@ -27,7 +27,7 @@ const AI = {
   site: 'M4 12h16M12 4a16 16 0 0 1 0 16M12 4a16 16 0 0 0 0 16M3 12a9 9 0 1 0 18 0 9 9 0 0 0-18 0',
   sair: 'M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l-5-5 5-5M5 12h11',
 };
-const ADM_TELAS = [['clientes', 'Clientes e mensalidades', 'Clientes'], ['custos', 'Custos de IA', 'Custos']];
+const ADM_TELAS = [['clientes', 'Clientes e mensalidades', 'Clientes'], ['custos', 'Custos e lucro', 'Lucro']];
 const ADM_LINKS = [['Site da Milla (vitrine)', 'https://milla-app.com/', 'site'], ['Demonstração ao vivo', 'https://milla-app.com/aovivo/', 'app']];
 const AP = { msg: '', anterior: '', senhaNova: false };
 function rota() { const t = location.hash.replace(/^#\/?/, '').split('/')[0]; return { tela: ADM_TELAS.some(x => x[0] === t) ? t : 'clientes' }; }
@@ -80,11 +80,11 @@ function render() {
   if (r.tela !== AP.anterior) {
     AP.anterior = r.tela; window.scrollTo(0, 0);
     /* as duas telas usam as fichas (os custos casam o robô com a imobiliária pela sala) */
-    admCarregar(true).then(() => { if (r.tela === 'custos') return cuCarregar(true); }).then(() => { if (rota().tela === r.tela) render(); });
+    admCarregar(true).then(() => { if (r.tela === 'custos') return Promise.all([cuCarregar(true), luCarregar(true)]); }).then(() => { if (rota().tela === r.tela) render(); });
   }
   $('meio').innerHTML = r.tela === 'custos' ? vCustos() : vClientes();
   renderLado(r);
-  document.title = 'ADM da Milla · ' + (r.tela === 'custos' ? 'Custos de IA' : 'Clientes');
+  document.title = 'ADM da Milla · ' + (r.tela === 'custos' ? 'Custos e lucro' : 'Clientes');
 }
 window.addEventListener('hashchange', render);
 
@@ -108,7 +108,7 @@ document.addEventListener('click', async e => {
   if (el.dataset.act === 'ap-sair') {
     await authSignOut(); AP.anterior = '';
     Object.assign(ADM, { fichas: [], cfg: null, avisos: [], nomes: {}, carregou: false, erro: '' });
-    Object.assign(CU, { dados: null, carregou: false, erro: '', semFuncao: false });
+    Object.assign(CU, { dados: null, carregou: false, erro: '', semFuncao: false }); Object.assign(LU, { porSala: {}, carregou: false });
     render(); return;
   }
   if (el.dataset.act === 'ap-esqueci') {

@@ -180,6 +180,7 @@ function admFicha(id) {
         <div><label class="sm b" for="adm-dv">Vence todo dia <span class="sm">· vazio: o mesmo da 1ª</span></label><input id="adm-dv" class="inp" inputmode="numeric" value="${esc(String(d.diaVenc || ''))}"></div></div>
       <div class="adm-2"><div><label class="sm b" for="adm-iv">Implantação (R$)</label><input id="adm-iv" class="inp" inputmode="decimal" value="${esc(String(d.implValor || ''))}"></div>
         <div><label class="adm-check"><input type="checkbox" id="adm-ip" ${d.implPaga ? 'checked' : ''}> Implantação já paga</label></div></div>
+      <label class="sm b" for="adm-li">Limite de IA incluído (R$ por mês) <span class="sm">· só você vê; vazio = o que a franquia de mensagens gasta</span></label><input id="adm-li" class="inp" inputmode="decimal" value="${esc(String(d.limite_ia_brl || ''))}" placeholder="automático">
       <label class="sm b" for="adm-o">Observações <span class="sm">· só você vê</span></label><textarea id="adm-o" class="inp" rows="3">${esc(d.obs || '')}</textarea>
       <div class="sm" id="adm-msg" role="status"></div>
     </div>`, `<button type="button" class="btn btn-navy" data-act="adm-salvar" data-v="${esc(f ? f.id : '')}">${f ? 'Salvar a ficha' : 'Cadastrar a imobiliária'}</button>`);
@@ -194,7 +195,7 @@ async function admSalvar(id) {
   const status = $('adm-st').value;
   if (sala && status !== 'encerrado' && ADM.fichas.some(x => x.sala === sala && x.id !== id && x.status !== 'encerrado')) { msg('Esse app já está ligado a outra ficha. Uma imobiliária, uma ficha.'); return; }
   const o = { contato: $('adm-p').value.trim(), wa: $('adm-w').value.replace(/\D/g, ''), plano: $('adm-pl').value.trim(), valor, status, sala, produto: 'milla',
-    inicio: $('adm-i').value || '', diaVenc: Math.min(31, Math.max(0, parseInt($('adm-dv').value, 10) || 0)) || '', implValor: admNum($('adm-iv').value), implPaga: $('adm-ip').checked, obs: $('adm-o').value.trim() };
+    inicio: $('adm-i').value || '', diaVenc: Math.min(31, Math.max(0, parseInt($('adm-dv').value, 10) || 0)) || '', implValor: admNum($('adm-iv').value), implPaga: $('adm-ip').checked, obs: $('adm-o').value.trim(), limite_ia_brl: admNum($('adm-li').value) || '' };
   if (!(f && f.cliId)) o.nome = nome;
   if (ADM.salvando) return; ADM.salvando = true; msg('Salvando…');
   try {
